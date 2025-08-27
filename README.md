@@ -4,6 +4,8 @@
 
 It allows you to **capture tokens live from proxy traffic** or **load them from local files**, and then **replace placeholders in requests** across Burp tools (Proxy, Repeater, Intruder, etc.).
 
+I found it usefull when a very short lifetime tokens are uses by the application. You can open the browser, proxy traffic via burp, signin to target application in the regular way and configure automatic page refresh (to enforce JS client application to handle SSO signin or refresh token operation). The page refresh can be achived as you prefer - via browser plugin or Developer Console code. This allows you to use Intruder, Repeater or Extender Tools in regular way without taking care of updating tokens.
+
 ---
 
 ## ✨ Features
