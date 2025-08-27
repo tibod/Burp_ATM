@@ -154,3 +154,18 @@ It contains:
 - Regex matching is on the raw request (headers+body).  
 - Placeholders must match the format `__Tn__`.
 
+## 🔀 Usage
+Example request with authorization data, that will be used by the plugin to update observed tokens value.
+```http
+GET /v1/users HTTP/1.1
+Host: api.example.com
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMn0.KMUFsIDTnFmyG3nMiGM6H9FNFUROf3wh7SmqJp-QV30
+X-Id-Token: wB6yQSIDeWsl2boRiBoDTwrIdKY9kCywxYE4KJxFZpjAXFHx8I8w8oOrQmZ7biB7
+```
+Example request from Repeater tab:
+```http
+GET /v1/orders HTTP/1.1
+Host: api.example.com
+Authorization: Bearer __T1__
+X-Id-Token: __T2__
+```
