@@ -23,6 +23,8 @@
 # - Auto-save on checkbox click and focus-lost of text fields/areas (and spinner changes).
 # - Guard: never capture values that look like placeholders (__T\d+__).
 # - Flash plugin tab title when a new token is learned.
+# - Added separate section "Live search tokens in:" with per-tool toggles
+# - Separated tool gating for replacement vs. live-capture
 #
 from burp import IBurpExtender, IHttpListener, ITab
 from java.awt import BorderLayout, GridBagLayout, GridBagConstraints, Insets, Dimension
@@ -688,3 +690,4 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             t.setRepeats(False); t.start()
         except:
             pass
+
