@@ -187,9 +187,8 @@ class RulesManager(object):
                 self._log("[Rules] Invalid regex, ignored: %s" % regex_str)
             else:
                 self.rules.append(rule)
-        self._log("[Rules] Loaded %d rule(s)" % (len(self.rules)))
 
-    def scan_and_update(self, raw_request_text):
+    def scan_and_update(self, raw_request_text, tool_name="Unknown"):
         changed = False
         for rule in self.rules:
             val = rule.match(raw_request_text)
@@ -200,7 +199,7 @@ class RulesManager(object):
                 if prev != val:
                     self.live_values[rule.placeholder] = val
                     show = val[:80] + ("..." if len(val) > 80 else "")
-                    self._log("[Live] %s := %s" % (rule.placeholder, show))
+                    self._log("[Live - %s] %s := %s" % (tool_name, rule.placeholder, show))
                     changed = True
         return changed
 
@@ -243,7 +242,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
 
     # ---------- UI builders ----------
     def _build_ui(self):
-        # Settings tab uses GridBagLayout; each row container uses left-aligned FlowLayout.
         from java.awt import GridBagLayout, GridBagConstraints, Insets, FlowLayout, Dimension
         from javax.swing import JPanel, JLabel, JTextField, JTextArea, JScrollPane, JCheckBox, JTabbedPane, SwingConstants
         from javax.swing.border import EmptyBorder
@@ -257,33 +255,28 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         c.fill = GridBagConstraints.HORIZONTAL
         row = 0
 
-        # --- Combined Row 1+2: Tokens dir, Enable file, Refresh interval, (spacer), Enable live, Write-to-files ---
+        # --- Combined Row 1: Tokens dir + Files on/off + refresh + Live + Write-to-files ---
         combined = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
 
-        # Tokens directory (narrow, single-line)
         combined.add(JLabel("Tokens directory: "))
         tf_cols_dir = 28
         self.dirField = JTextField(os.getcwd(), tf_cols_dir)
         self._fix_singleline(self.dirField)
         combined.add(self.dirField)
 
-        # Read tokens from files
         self.cbEnableFiles = JCheckBox("Read tokens from files", True)
         combined.add(self.cbEnableFiles)
 
-        # Refresh interval (narrow)
         combined.add(JLabel("File read interval (s): "))
         self.refreshSpinner = JSpinner(SpinnerNumberModel(60, 1, 3600, 1))
         self.refreshSpinner.setMaximumSize(self.refreshSpinner.getPreferredSize())
         combined.add(self.refreshSpinner)
 
-        # Spacer between former rows 1 and 2
         spacer = JPanel()
         spacer.setPreferredSize(Dimension(24, 1))
         spacer.setOpaque(False)
         combined.add(spacer)
 
-        # Enable live + Write captured to files
         self.cbEnableLive  = JCheckBox("Enable live tokens capture", True)
         self.cbWriteFiles  = JCheckBox("Write captured tokens to files", False)
         combined.add(self.cbEnableLive)
@@ -292,23 +285,39 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.HORIZONTAL
         self.settingsPanel.add(combined, c); row += 1
 
-        # --- Row 3: Apply to... (left aligned) ---
+        # --- Row 2: REPLACEMENT tool toggles ---
+        row2 = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
+        row2.add(JLabel("Replace token in: "))
+        self.cbRProxy     = JCheckBox("Proxy", True)
+        self.cbRRepeater  = JCheckBox("Repeater", True)
+        self.cbRIntruder  = JCheckBox("Intruder", True)
+        self.cbRScanner   = JCheckBox("Scanner", True)
+        self.cbRTarget    = JCheckBox("Target", False)
+        self.cbRSequencer = JCheckBox("Sequencer", False)
+        self.cbRExtender  = JCheckBox("Extender", True)
+        for cb in [self.cbRProxy, self.cbRRepeater, self.cbRIntruder, self.cbRScanner,
+                   self.cbRTarget, self.cbRSequencer, self.cbRExtender]:
+            row2.add(cb)
+        c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.HORIZONTAL
+        self.settingsPanel.add(row2, c); row += 1
+
+        # --- Row 3: LIVE CAPTURE tool toggles ---
         row3 = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
-        row3.add(JLabel("Enable plugin for: "))
-        self.cbProxy     = JCheckBox("Proxy", True)
-        self.cbRepeater  = JCheckBox("Repeater", True)
-        self.cbIntruder  = JCheckBox("Intruder", True)
-        self.cbScanner   = JCheckBox("Scanner", True)
-        self.cbTarget    = JCheckBox("Target", False)
-        self.cbSequencer = JCheckBox("Sequencer", False)
-        self.cbExtender  = JCheckBox("Extender", True)
-        for cb in [self.cbProxy, self.cbRepeater, self.cbIntruder, self.cbScanner,
-                   self.cbTarget, self.cbSequencer, self.cbExtender]:
+        row3.add(JLabel("Live search tokens in: "))
+        self.cbCProxy     = JCheckBox("Proxy", True)
+        self.cbCRepeater  = JCheckBox("Repeater", True)
+        self.cbCIntruder  = JCheckBox("Intruder", True)
+        self.cbCScanner   = JCheckBox("Scanner", True)
+        self.cbCTarget    = JCheckBox("Target", False)
+        self.cbCSequencer = JCheckBox("Sequencer", False)
+        self.cbCExtender  = JCheckBox("Extender", True)
+        for cb in [self.cbCProxy, self.cbCRepeater, self.cbCIntruder, self.cbCScanner,
+                   self.cbCTarget, self.cbCSequencer, self.cbCExtender]:
             row3.add(cb)
         c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.HORIZONTAL
         self.settingsPanel.add(row3, c); row += 1
 
-        # --- Row 4: URL filter regex (narrow, single-line, left aligned) ---
+        # --- Row 4: URL filter regex ---
         row4 = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
         row4.add(JLabel("URL filter regex (full URL): "))
         tf_cols_url = 30
@@ -318,18 +327,17 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.HORIZONTAL
         self.settingsPanel.add(row4, c); row += 1
 
-        # --- Row 5: Rules textarea with tooltip (EXPANDS to fill) ---
+        # --- Row 5: Rules textarea ---
         self.rulesArea = JTextArea(16, 92)
         self.rulesArea.setToolTipText(RULES_TOOLTIP)
         self.rulesArea.setLineWrap(True); self.rulesArea.setWrapStyleWord(True)
-        # USTAW DOMYŚLNE REGUŁY NA START
         self.rulesArea.setText(DEFAULT_RULES_EXAMPLE)
 
         rulesScroll = JScrollPane(self.rulesArea)
         c.gridy = row; c.weighty = 1.0; c.fill = GridBagConstraints.BOTH
         self.settingsPanel.add(rulesScroll, c); row += 1
 
-        # --- Row 6: Current tokens (left) + scroll (fixed height) ---
+        # --- Row 6: Current tokens ---
         row6lbl = JLabel("Current tokens (live capture):")
         row6lbl.setHorizontalAlignment(SwingConstants.LEFT)
         c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.HORIZONTAL
@@ -340,8 +348,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.BOTH
         self.settingsPanel.add(curScroll, c); row += 1
 
-        # --- Row 7: Config path info (left) ---
-        from javax.swing import JLabel
+        # --- Row 7: Config path info ---
         confInfo = JLabel("Config file: %s" % CONF_FILE)
         c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.HORIZONTAL
         self.settingsPanel.add(confInfo, c); row += 1
@@ -353,7 +360,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self.logPanel.setBorder(EmptyBorder(10,10,10,10))
         self.logPanel.add(logScroll, BorderLayout.CENTER)
 
-        # --- TabbedPane ---
+        # --- Tabs ---
         self.tabbed.addTab("Settings", self.settingsPanel)
         self.tabbed.addTab("Log", self.logPanel)
 
@@ -361,8 +368,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self._wire_autosave_handlers()
 
     def _fix_singleline(self, tf):
-        """Force single-line narrow text fields that don't stretch horizontally."""
-        # JTextField is single-line by default; constrain width so Box/GridBag won't stretch it
         tf.setMaximumSize(tf.getPreferredSize())
 
     def _wire_autosave_handlers(self):
@@ -371,9 +376,16 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             def itemStateChanged(self, e): self.outer._auto_save()
 
         ih = _ItemHandler(self)
-        for cb in [self.cbEnableFiles, self.cbEnableLive, self.cbWriteFiles,
-                   self.cbProxy, self.cbRepeater, self.cbIntruder, self.cbScanner,
-                   self.cbTarget, self.cbSequencer, self.cbExtender]:
+        # original checkboxes
+        for cb in [self.cbEnableFiles, self.cbEnableLive, self.cbWriteFiles]:
+            cb.addItemListener(ih)
+        # replacement tool toggles
+        for cb in [self.cbRProxy, self.cbRRepeater, self.cbRIntruder, self.cbRScanner,
+                   self.cbRTarget, self.cbRSequencer, self.cbRExtender]:
+            cb.addItemListener(ih)
+        # capture tool toggles
+        for cb in [self.cbCProxy, self.cbCRepeater, self.cbCIntruder, self.cbCScanner,
+                   self.cbCTarget, self.cbCSequencer, self.cbCExtender]:
             cb.addItemListener(ih)
 
         class _ChangeHandler(ChangeListener):
@@ -389,12 +401,30 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self.dirField.addFocusListener(fh)
         self.urlFilterField.addFocusListener(fh)
         self.rulesArea.addFocusListener(fh)
+        
+    def _tool_name(self, toolFlag):
+        cb = self.callbacks
+        mapping = {
+            cb.TOOL_PROXY: "Proxy",
+            cb.TOOL_REPEATER: "Repeater",
+            cb.TOOL_INTRUDER: "Intruder",
+            cb.TOOL_SCANNER: "Scanner",
+            cb.TOOL_TARGET: "Target",
+            cb.TOOL_SEQUENCER: "Sequencer",
+            cb.TOOL_EXTENDER: "Extender",
+        }
+        return mapping.get(toolFlag, "Unknown")
 
     # --- IHttpListener ---
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
         if not messageIsRequest:
             return
-        if not self._tool_allowed(toolFlag):
+
+        # Determine which modes are on for this tool
+        allow_replace = self._tool_allowed(toolFlag, "replace")
+        allow_capture = self._tool_allowed(toolFlag, "capture")
+
+        if not allow_replace and not allow_capture:
             return
 
         try:
@@ -419,8 +449,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             except:
                 full_url = ""
 
-            # Live capture, gated by URL filter
-            if self.cbEnableLive.isSelected():
+            # Live capture, gated by URL filter AND per-tool capture setting
+            if allow_capture and self.cbEnableLive.isSelected():
                 url_ok = True
                 url_regex = self.urlFilterField.getText().strip()
                 if url_regex:
@@ -431,7 +461,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                         self._log("[URL-Filter] Invalid regex: %s" % str(e))
                         url_ok = True
                 if url_ok:
-                    if self.rules_mgr.scan_and_update(raw_text):
+                    tool_name = self._tool_name(toolFlag)
+                    if self.rules_mgr.scan_and_update(raw_text, tool_name):
                         self._refresh_current_tokens_view()
                         if self.cbWriteFiles.isSelected():
                             for ph, val in self.rules_mgr.live_values.items():
@@ -439,9 +470,12 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                                     self.file_cache.write_value(ph, val)
                         self._flash_tab_title()
 
-            # Replacement in headers/body (LIVE -> FILES)
-            modified_headers = self._replace_in_headers(headers)
-            modified_body_str = self._replace_placeholders(body_str)
+            # Replacement in headers/body (LIVE -> FILES), only if tool is allowed for replacement
+            modified_headers = None
+            modified_body_str = body_str
+            if allow_replace:
+                modified_headers = self._replace_in_headers(headers)
+                modified_body_str = self._replace_placeholders(body_str)
 
             changed = (modified_headers is not None) or (modified_body_str != body_str)
             if not changed:
@@ -474,16 +508,28 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
         self._refresh_current_tokens_view()
 
     # --- Helpers ---
-    def _tool_allowed(self, toolFlag):
+    def _tool_allowed(self, toolFlag, mode):
+        """
+        mode: 'replace' or 'capture'
+        """
         cb = self.callbacks
         allowed = []
-        if self.cbProxy.isSelected():     allowed.append(cb.TOOL_PROXY)
-        if self.cbRepeater.isSelected():  allowed.append(cb.TOOL_REPEATER)
-        if self.cbIntruder.isSelected():  allowed.append(cb.TOOL_INTRUDER)
-        if self.cbScanner.isSelected():   allowed.append(cb.TOOL_SCANNER)
-        if self.cbTarget.isSelected():    allowed.append(cb.TOOL_TARGET)
-        if self.cbSequencer.isSelected(): allowed.append(cb.TOOL_SEQUENCER)
-        if self.cbExtender.isSelected():  allowed.append(cb.TOOL_EXTENDER)
+        if mode == "replace":
+            if self.cbRProxy.isSelected():     allowed.append(cb.TOOL_PROXY)
+            if self.cbRRepeater.isSelected():  allowed.append(cb.TOOL_REPEATER)
+            if self.cbRIntruder.isSelected():  allowed.append(cb.TOOL_INTRUDER)
+            if self.cbRScanner.isSelected():   allowed.append(cb.TOOL_SCANNER)
+            if self.cbRTarget.isSelected():    allowed.append(cb.TOOL_TARGET)
+            if self.cbRSequencer.isSelected(): allowed.append(cb.TOOL_SEQUENCER)
+            if self.cbRExtender.isSelected():  allowed.append(cb.TOOL_EXTENDER)
+        else:  # capture
+            if self.cbCProxy.isSelected():     allowed.append(cb.TOOL_PROXY)
+            if self.cbCRepeater.isSelected():  allowed.append(cb.TOOL_REPEATER)
+            if self.cbCIntruder.isSelected():  allowed.append(cb.TOOL_INTRUDER)
+            if self.cbCScanner.isSelected():   allowed.append(cb.TOOL_SCANNER)
+            if self.cbCTarget.isSelected():    allowed.append(cb.TOOL_TARGET)
+            if self.cbCSequencer.isSelected(): allowed.append(cb.TOOL_SEQUENCER)
+            if self.cbCExtender.isSelected():  allowed.append(cb.TOOL_EXTENDER)
         return toolFlag in allowed
 
     def _replace_in_headers(self, headers):
@@ -504,7 +550,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             if (val is None or val == "") and self.cbEnableFiles.isSelected():
                 val = self.file_cache.get_value(ph)
             if val and not PLACEHOLDER_EXACT.match(val):
-                self._log("[Replace] %s := %s" % (ph, (val[:80] + ("..." if len(val) > 80 else ""))))
                 return val
             return ph
         try:
@@ -538,14 +583,23 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
             "write_files": bool(self.cbWriteFiles.isSelected()),
             "rules": self.rulesArea.getText(),
             "url_filter": self.urlFilterField.getText().strip(),
-            "tools": {
-                "proxy": bool(self.cbProxy.isSelected()),
-                "repeater": bool(self.cbRepeater.isSelected()),
-                "intruder": bool(self.cbIntruder.isSelected()),
-                "scanner": bool(self.cbScanner.isSelected()),
-                "target": bool(self.cbTarget.isSelected()),
-                "sequencer": bool(self.cbSequencer.isSelected()),
-                "extender": bool(self.cbExtender.isSelected()),
+            "replace_tools": {
+                "proxy": bool(self.cbRProxy.isSelected()),
+                "repeater": bool(self.cbRRepeater.isSelected()),
+                "intruder": bool(self.cbRIntruder.isSelected()),
+                "scanner": bool(self.cbRScanner.isSelected()),
+                "target": bool(self.cbRTarget.isSelected()),
+                "sequencer": bool(self.cbRSequencer.isSelected()),
+                "extender": bool(self.cbRExtender.isSelected()),
+            },
+            "capture_tools": {
+                "proxy": bool(self.cbCProxy.isSelected()),
+                "repeater": bool(self.cbCRepeater.isSelected()),
+                "intruder": bool(self.cbCIntruder.isSelected()),
+                "scanner": bool(self.cbCScanner.isSelected()),
+                "target": bool(self.cbCTarget.isSelected()),
+                "sequencer": bool(self.cbCSequencer.isSelected()),
+                "extender": bool(self.cbCExtender.isSelected()),
             }
         }
         try:
@@ -575,15 +629,26 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab):
                 self.rulesArea.setText(rules_val)
             
             self.urlFilterField.setText(data.get("url_filter", ""))
-            
-            tools = data.get("tools", {})
-            self.cbProxy.setSelected(bool_from(tools.get("proxy", True), True))
-            self.cbRepeater.setSelected(bool_from(tools.get("repeater", True), True))
-            self.cbIntruder.setSelected(bool_from(tools.get("intruder", True), True))
-            self.cbScanner.setSelected(bool_from(tools.get("scanner", True), True))
-            self.cbTarget.setSelected(bool_from(tools.get("target", False), False))
-            self.cbSequencer.setSelected(bool_from(tools.get("sequencer", False), False))
-            self.cbExtender.setSelected(bool_from(tools.get("extender", True), True))
+
+            # Defaults mirror previous behavior
+            rep = data.get("replace_tools", {})
+            cap = data.get("capture_tools", {})
+
+            self.cbRProxy.setSelected(bool_from(rep.get("proxy", True), True))
+            self.cbRRepeater.setSelected(bool_from(rep.get("repeater", True), True))
+            self.cbRIntruder.setSelected(bool_from(rep.get("intruder", True), True))
+            self.cbRScanner.setSelected(bool_from(rep.get("scanner", True), True))
+            self.cbRTarget.setSelected(bool_from(rep.get("target", False), False))
+            self.cbRSequencer.setSelected(bool_from(rep.get("sequencer", False), False))
+            self.cbRExtender.setSelected(bool_from(rep.get("extender", True), True))
+
+            self.cbCProxy.setSelected(bool_from(cap.get("proxy", True), True))
+            self.cbCRepeater.setSelected(bool_from(cap.get("repeater", True), True))
+            self.cbCIntruder.setSelected(bool_from(cap.get("intruder", True), True))
+            self.cbCScanner.setSelected(bool_from(cap.get("scanner", True), True))
+            self.cbCTarget.setSelected(bool_from(cap.get("target", False), False))
+            self.cbCSequencer.setSelected(bool_from(cap.get("sequencer", False), False))
+            self.cbCExtender.setSelected(bool_from(cap.get("extender", True), True))
 
             self.file_cache.set_base_dir(self.dirField.getText().strip())
             self.file_cache.set_refresh_interval(int(self.refreshSpinner.getValue()))
