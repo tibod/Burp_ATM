@@ -13,7 +13,6 @@ from java.awt.event import ItemListener, FocusListener, ComponentAdapter
 import os, re, time, json, base64, hashlib
 from datetime import datetime, timedelta
 
-# ----- Configuration / constants -----
 try:
     BASE_DIR = os.path.dirname(__file__)
 except:
@@ -22,10 +21,11 @@ except:
 EXTENSION_NAME = "Advanced Token Manager"
 CONF_FILE = os.path.join(BASE_DIR, "AdvancedTokenManager.conf")
 PLACEHOLDER_REGEX = re.compile(r'__T(\d+)__')
-PLACEHOLDER_EXACT = re.compile(r'^__T\d+__$')  # guard: do not capture placeholder-like values
+PLACEHOLDER_EXACT = re.compile(r'^__T\d+__$')
 EXT_LOG = None
     
 def set_gmt_offset(value):
+    """Sets the GMT/UTC hour offset used to render timestamps."""
     global GMT_OFFSET_HOURS
     try:
         if value is None or value == "":
@@ -55,12 +55,14 @@ def set_gmt_offset(value):
         return False
 
 def get_gmt_offset():
+    """Returns the currently configured GMT/UTC hour offset."""
     try:
         return float(GMT_OFFSET_HOURS)
     except:
         return 0.0
 
 def bool_from(obj, default=False):
+    """Converts a truthy string or object to a boolean value."""
     try:
         s = str(obj).strip().lower()
         return s in ("1", "true", "yes", "on")
@@ -68,6 +70,7 @@ def bool_from(obj, default=False):
         return default
 
 def fmt_ts(ts):
+    """Formats a UNIX timestamp (seconds or milliseconds) using the GMT offset."""
     try:
         try:
             ts_int = int(ts)
@@ -95,6 +98,7 @@ def fmt_ts(ts):
         return ""
 
 def hash10(s):
+    """Returns the first 10 characters of the SHA-256 hash of the input text."""
     if s == "":
         return ""
         
@@ -104,6 +108,7 @@ def hash10(s):
         return "??????????"
 
 def _try_log(msg):
+    """Writes a message to the extension log if a logger is available."""
     try:
         g = globals().get('log', None)
         if callable(g):
@@ -121,6 +126,7 @@ def _try_log(msg):
     except: pass
 
 def _b64url_to_text(b64s):
+    """Decodes URL-safe Base64 input and returns a UTF-8 string."""
     try:
         s = (b64s or "")
         pad = '=' * ((4 - (len(s) % 4)) % 4)
@@ -137,6 +143,7 @@ def _b64url_to_text(b64s):
         raise
 
 def _extract_jwt_core(token):
+    """Extracts the core JWT token in the form header.payload.signature."""
     try:
         t = (token or "").strip()
         if not t: return None
@@ -150,6 +157,7 @@ def _extract_jwt_core(token):
         return None
 
 def _decode_jwt_payload(token):
+    """Decodes a JWT payload into a Python dictionary."""
     core = _extract_jwt_core(token)
     if not core:
         return None
@@ -157,7 +165,6 @@ def _decode_jwt_payload(token):
         parts = core.split('.')
         if len(parts) != 3: return None
         header_b64, payload_b64 = parts[0], parts[1]
-        # header is parsed mainly to validate base64; ignore content
         _ = json.loads(_b64url_to_text(header_b64))
         try:
             obj = json.loads(_b64url_to_text(payload_b64))
@@ -168,6 +175,7 @@ def _decode_jwt_payload(token):
         return None
 
 def jwt_exp_str(token):
+    """Returns the JWT expiration time formatted as a local timestamp."""
     obj = _decode_jwt_payload(token)
     if not obj: return ""
     exp = obj.get('exp')
@@ -183,27 +191,40 @@ def jwt_exp_str(token):
         exp_int //= 1000
     return fmt_ts(exp_int)
 
-# --------------------- File cache ---------------------
 class TokenCache(object):
+    """Caches token values in memory, backed by a directory of text files."""
+    
     def __init__(self, base_dir, refresh_interval_sec=60, logger=None):
+        """Internal helper function __init__."""
         self.base_dir = base_dir
         self.refresh_interval = max(1, int(refresh_interval_sec))
         self.cache = {}
         self._logger = logger
 
     def set_base_dir(self, base_dir): self.base_dir = base_dir
+    """Sets base dir."""
+    
     def set_refresh_interval(self, sec): self.refresh_interval = max(1, int(sec))
+    """Sets refresh interval."""
+    
     def _log(self, msg):
+        """Internal helper function _log."""
         if self._logger: self._logger(msg)
+        
     def _file_path(self, placeholder):
+        """Internal helper function _file_path."""
         return os.path.join(self.base_dir, placeholder + ".txt")
+        
     def _load_file(self, path):
+        """Internal helper function _load_file."""
         with open(path, 'rb') as f:
             raw = f.read()
         first = raw.splitlines()[0] if raw else b""
         try: return first.decode('utf-8').strip()
         except: return first.decode('latin-1').strip()
+        
     def get_value(self, placeholder):
+        """Gets value."""
         if not self.base_dir or not os.path.isdir(self.base_dir):
             return None
         path = self._file_path(placeholder)
@@ -230,7 +251,9 @@ class TokenCache(object):
                 self._log("[Files] Error reading %s: %s" % (path, str(e)))
                 return None
         return self.cache[placeholder]['value']
+        
     def get_value_and_mtime(self, placeholder):
+        """Gets value and mtime."""
         val = self.get_value(placeholder)
         if val is None: return None, None
         try:
@@ -238,7 +261,9 @@ class TokenCache(object):
         except:
             mtime = None
         return val, mtime
+        
     def write_value(self, placeholder, value):
+        """Implements function write_value."""
         if not self.base_dir or not os.path.isdir(self.base_dir):
             self._log("[Files] Base dir does not exist; cannot write.")
             return False
@@ -254,67 +279,132 @@ class TokenCache(object):
             self._log("[Files] Error writing %s: %s" % (path, str(e)))
             return False
 
-# --------------------- Live capture rules ---------------------
 class Rule(object):
-    def __init__(self, placeholder, regex_str):
-        self.placeholder = placeholder.strip()
+    """Represents a live-capture rule with a token regex and optional URL filter."""
+    
+    def __init__(self, placeholder, regex_str, url_filter_regex=""):
+        """Internal helper function __init__."""
+        self.placeholder = (placeholder or "").strip()
         self.regex_str = (regex_str or "").strip()
+        self.url_filter_regex = (url_filter_regex or "").strip()
+
+        flags = re.MULTILINE | re.DOTALL
+
         self.pattern = None
         try:
-            flags = re.MULTILINE
             if self.regex_str:
                 self.pattern = re.compile(self.regex_str, flags)
         except Exception:
             self.pattern = None
-    def match(self, text):
-        if not self.pattern: return None
-        m = self.pattern.search(text)
-        if not m: return None
-        if m.groups():
-            return (m.group(1) or "").strip()
-        return m.group(0).strip()
+
+        try:
+            uf = self.url_filter_regex if self.url_filter_regex else ".*"
+            self.url_pattern = re.compile(uf)
+        except Exception:
+            self.url_pattern = re.compile(".*")
+
+    def match(self, text, full_url):
+        """Implements function match."""
+        try:
+            url_s = "" if full_url is None else str(full_url)
+        except Exception:
+            url_s = full_url or ""
+        try:
+            if self.url_pattern and not self.url_pattern.search(url_s):
+                return None
+        except Exception:
+            pass
+
+        if not self.pattern:
+            return None
+        m = self.pattern.search(text or "")
+        if not m:
+            return None
+
+        try:
+            if m.groups():
+                return (m.group(1) or "").strip()
+            return m.group(0).strip()
+        except Exception:
+            return m.group(0).strip()
 
 class RulesManager(object):
+    """Manages capture rules and stores current token values with metadata."""
+    
     def __init__(self, logger=None):
+        """Internal helper function __init__."""
         self._logger = logger
-        self.rules = []  # list[Rule]
-        self.rules_dict = {}  # {"__T0__": "regex", ...}
-        self.live_values = {}  # {"__T0__": {"value":"...", "ts": epoch, "source":"Live|Manual"}}
+        self.rules = []
+        self.rules_dict = {}
+        self.live_values = {}
+        
+    def get_live_value(self, placeholder):
+        """Zwraca aktualnie znaną wartość dla placeholdera (albo None)."""
+        try:
+            return (self.live_values.get(placeholder) or {}).get("value")
+        except Exception:
+            return None
+
+    def get_live_meta(self, placeholder):
+        """Zwraca meta-informację: {'value':..., 'ts':..., 'source':...} – zawsze słownik."""
+        try:
+            meta = self.live_values.get(placeholder)
+            if isinstance(meta, dict):
+                return meta
+        except Exception:
+            pass
+        return {"value": "", "ts": None, "source": ""}
+
     def _log(self, msg):
+        """Internal helper function _log."""
         if self._logger: self._logger(msg)
+
     def load_rules_from_dict(self, rules_dict):
         self.rules = []
         self.rules_dict = {}
-        if isinstance(rules_dict, dict):
-            for k, v in rules_dict.items():
-                ph = str(k).strip()
-                rx = (v or "").strip()
-                if ph.startswith("__T") and ph.endswith("__"):
-                    self.rules_dict[ph] = rx
-                    self.rules.append(Rule(ph, rx))
-        else:
-            # ignore bad format completely (per requirement)
+        if not isinstance(rules_dict, dict):
             self._log("[Rules] Ignoring non-dict rules in config; starting fresh.")
-            self.rules_dict = {}
-            self.rules = []
-    def set_rule(self, placeholder, regex_str):
-        self.rules_dict[str(placeholder)] = (regex_str or "")
-        # rebuild single rule
+            return
+
+        for k, v in rules_dict.items():
+            ph = str(k).strip()
+            if not (ph.startswith("__T") and ph.endswith("__")):
+                continue
+            if isinstance(v, dict):
+                rx = (v.get("regex", "") or "").strip()
+                uf = (v.get("url_filter", "") or "").strip()
+            else:
+                rx = (v or "").strip()
+                uf = ""
+            self.rules_dict[ph] = {"regex": rx, "url_filter": uf}
+            self.rules.append(Rule(ph, rx, uf))
+
+    def set_rule(self, placeholder, regex_str=None, url_filter_regex=None):
+        entry = self.rules_dict.get(placeholder, {"regex": "", "url_filter": ""})
+        if regex_str is not None:
+            entry["regex"] = (regex_str or "").strip()
+        if url_filter_regex is not None:
+            entry["url_filter"] = (url_filter_regex or "").strip()
+        self.rules_dict[placeholder] = entry
+
         found = False
         for i, r in enumerate(self.rules):
             if r.placeholder == placeholder:
-                self.rules[i] = Rule(placeholder, regex_str)
+                self.rules[i] = Rule(placeholder, entry["regex"], entry["url_filter"])
                 found = True
                 break
         if not found:
-            self.rules.append(Rule(placeholder, regex_str))
+            self.rules.append(Rule(placeholder, entry["regex"], entry["url_filter"]))
+
     def get_placeholders(self):
-        phs = sorted(set([r.placeholder for r in self.rules] + list(self.rules_dict.keys())))
-        return phs
-    def scan_and_update(self, raw_request_text, tool_name="Unknown"):
+        """Gets placeholders."""
+        return sorted(set([r.placeholder for r in self.rules] + list(self.rules_dict.keys())))
+
+    def scan_and_update(self, raw_request_text, full_url, tool_name="Unknown"):
+        """Implements function scan_and_update."""
         changed = False
         for rule in self.rules:
-            val = rule.match(raw_request_text)
+            val = rule.match(raw_request_text, full_url)
             if val:
                 if PLACEHOLDER_EXACT.match(val):
                     continue
@@ -326,16 +416,11 @@ class RulesManager(object):
                     self._log("[%s] [Live - %s] %s := %s" % (h10, tool_name, rule.placeholder, val))
                     changed = True
         return changed
-    def get_live_value(self, placeholder):
-        meta = self.live_values.get(placeholder)
-        if meta: return meta.get("value")
-        return None
-    def get_live_meta(self, placeholder):
-        return self.live_values.get(placeholder) or {}
 
-# --------------------- Main Burp extension ---------------------
 class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
+    """Burp Suite extension implementing UI, HTTP hooks, and settings."""
     def registerExtenderCallbacks(self, callbacks):
+        """Implements function registerExtenderCallbacks."""
         self.callbacks = callbacks
         self.helpers = callbacks.getHelpers()
         callbacks.setExtensionName(EXTENSION_NAME)
@@ -349,13 +434,10 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         self.file_cache = TokenCache(self.dirField.getText(), int(self.refreshSpinner.getValue()), logger=self._log)
         self.rules_mgr = RulesManager(logger=self._log)
 
-        # Load settings (may include rules dict in new format)
         self._load_settings_from_file()
 
-        # Ensure table has placeholders __T0__..__T9__ (and load regex from config if any)
         self._init_table_rows_with_defaults()
 
-        # Apply loaded rules into RulesManager
         self.rules_mgr.load_rules_from_dict(self._get_rules_dict_from_table())
 
         callbacks.registerHttpListener(self)
@@ -365,12 +447,11 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         self._log("%s loaded." % EXTENSION_NAME)
         self._log("Placeholders available: __T0__ .. __T9__ (editable Regex/Value in table)")
 
-        # Initial refresh of the table values (Updated/Hash/Source/Expires/Current Value)
         self._refresh_tokens_table_values()
 
-    # ---------- UI builders ----------
     def _build_ui(self):
-        self._suspend_col_resize = False  # blokada przed zapętleniem przy programowej zmianie szerokości
+        """Internal helper function _build_ui."""
+        self._suspend_col_resize = False
 
         self.settingsPanel = JPanel(GridBagLayout())
         self.settingsPanel.setBorder(EmptyBorder(10,10,10,10))
@@ -381,7 +462,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         c.fill = GridBagConstraints.HORIZONTAL
         row = 0
 
-        # --- Combined Row 1
         combined = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
         combined.add(JLabel("Tokens directory: "))
         tf_cols_dir = 28
@@ -405,7 +485,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         self.cbWriteFiles  = JCheckBox("Write captured tokens to files", False)
         combined.add(self.cbWriteFiles)
 
-        combined.add(JLabel("GMT offset (hrs): "))
+        combined.add(JLabel("Local time GMT offset (hrs): "))
         self.gmtOffsetField = JTextField("0", 6)
         self.gmtOffsetField.setToolTipText("Enter hours offset from UTC, e.g. +2, -6, 1.5. Valid range -12 .. +14")
         self._fix_singleline(self.gmtOffsetField)
@@ -414,7 +494,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.HORIZONTAL
         self.settingsPanel.add(combined, c); row += 1
 
-        # --- Row 2: REPLACEMENT tool toggles (z wymuszoną szerokością etykiety)
         row2 = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
         lblReplace = JLabel("Replace token in: ")
         row2.add(lblReplace)
@@ -429,7 +508,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
                    self.cbRTarget, self.cbRSequencer, self.cbRExtender]:
             row2.add(cb)
 
-        # --- Row 3: LIVE CAPTURE tool toggles (z tą samą szerokością etykiety)
         row3 = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
         lblLive = JLabel("Live search tokens in: ")
         row3.add(lblLive)
@@ -444,81 +522,102 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
                    self.cbCTarget, self.cbCSequencer, self.cbCExtender]:
             row3.add(cb)
 
-        # === Wyrównanie etykiet do identycznej szerokości ===
         try:
-            # policz maksymalną preferowaną szerokość
             d1 = lblReplace.getPreferredSize()
             d2 = lblLive.getPreferredSize()
             max_w = max(d1.width, d2.width)
             pref_h = max(d1.height, d2.height)
             dim = Dimension(max_w, pref_h)
-            # ustaw identyczny preferred/minimum size
             for lab in (lblReplace, lblLive):
                 lab.setPreferredSize(dim)
                 lab.setMinimumSize(dim)
-                # zapobiega niechcianemu rozciąganiu w FlowLayout (zachowujemy left-align)
         except:
             pass
 
-        c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.HORIZONTAL
-        self.settingsPanel.add(row2, c); row += 1
-        c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.HORIZONTAL
-        self.settingsPanel.add(row3, c); row += 1
-
-        # --- Row 4: URL filter regex
-        row4 = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
-        row4.add(JLabel("URL filter regex (full URL): "))
-        tf_cols_url = 30
-        self.urlFilterField = JTextField("", tf_cols_url)
-        self._fix_singleline(self.urlFilterField)
-        row4.add(self.urlFilterField)
-        c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.HORIZONTAL
-        self.settingsPanel.add(row4, c); row += 1
-
-        # --- Row 5: Tokens table
-        columns = ["Placeholder", "Regex", "Updated", "Hash", "Source", "Expires", "Current Value"]
+        c.gridy = row; self.settingsPanel.add(row2, c); row += 1
+        c.gridy = row; self.settingsPanel.add(row3, c); row += 1
+        
+        columns = ["Token", "Token regex", "URL filter", "Updated", "Hash", "Source", "Expires", "Current Value"]
 
         class TokensTableModel(DefaultTableModel):
+            """Defines the TokensTableModel class."""
             def __init__(self, columns, rows):
+                """Internal helper function __init__."""
                 DefaultTableModel.__init__(self, columns, rows)
             def isCellEditable(self, row, col):
-                try:
-                    return (col == 1 or col == 6)
-                except:
-                    return False
+                """Implements function isCellEditable."""
+                return col in (1, 2, 7)
 
         self.tokensModel = TokensTableModel(columns, 0)
         self.tokensTable = JTable(self.tokensModel)
 
-        # flaga do wyciszania eventów
-        self._suspend_table_events = False
+        from javax.swing.table import DefaultTableCellRenderer
+        from java.awt import Color
 
-        # table edits listener (jak było)
-        self._table_listener = self._on_table_edited()
-        self.tokensModel.addTableModelListener(self._table_listener)
+        outer = self
+        class ExpiresRenderer(DefaultTableCellRenderer):
+            """Defines the ExpiresRenderer class."""
+            
+            def getTableCellRendererComponent(self, table, value, isSelected, hasFocus, row, column):
+                """Implements function getTableCellRendererComponent."""
+                comp = DefaultTableCellRenderer.getTableCellRendererComponent(
+                    self, table, value, isSelected, hasFocus, row, column
+                )
+                try:
+                    txt = (value or "").strip()
+                    bg = None
+                    if txt:
+                        dt = datetime.strptime(txt, "%Y-%m-%d %H:%M:%S")
+                        now = datetime.strptime(fmt_ts(time.time()), "%Y-%m-%d %H:%M:%S")
+                        delta = (dt - now).total_seconds()
+                        if delta <= 0:
+                            bg = Color(255, 128, 128)
+                        elif delta <= 5*60:
+                            bg = Color(255, 200, 120)
+                        elif delta <= 10*60:
+                            bg = Color(255, 255, 160)
+                    if bg is not None and not isSelected:
+                        comp.setForeground(bg)
+                    else:
+                        if not isSelected:
+                            comp.setForeground(table.getForeground())
+                except:
+                    if not isSelected:
+                        comp.setForeground(table.getForeground())
+                return comp
 
-        # TRYB: kontrolujemy szerokości sami i zawsze wypełniamy viewport
-        self.tokensTable.setAutoResizeMode(JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS)
-
-        # wstępne preferencje (użyte także do domyślnych ratio, jeśli brak w configu)
         try:
-            self.tokensTable.getColumnModel().getColumn(0).setPreferredWidth(90)
-            self.tokensTable.getColumnModel().getColumn(1).setPreferredWidth(400)
-            self.tokensTable.getColumnModel().getColumn(2).setPreferredWidth(135)
-            self.tokensTable.getColumnModel().getColumn(3).setPreferredWidth(70)
-            self.tokensTable.getColumnModel().getColumn(4).setPreferredWidth(120)
-            self.tokensTable.getColumnModel().getColumn(5).setPreferredWidth(135)
-            self.tokensTable.getColumnModel().getColumn(6).setPreferredWidth(500)
+            self.tokensTable.getColumnModel().getColumn(6).setCellRenderer(ExpiresRenderer())
         except:
             pass
 
-        # Scroll + dynamiczne dopasowanie
+        self._suspend_table_events = False
+
+        self._table_listener = self._on_table_edited()
+        self.tokensModel.addTableModelListener(self._table_listener)
+
+        self.tokensTable.setAutoResizeMode(JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS)
+
+        try:
+            self.tokensTable.getColumnModel().getColumn(0).setPreferredWidth(90)
+            self.tokensTable.getColumnModel().getColumn(1).setPreferredWidth(400)
+            self.tokensTable.getColumnModel().getColumn(2).setPreferredWidth(260)
+            self.tokensTable.getColumnModel().getColumn(3).setPreferredWidth(135)
+            self.tokensTable.getColumnModel().getColumn(4).setPreferredWidth(70)
+            self.tokensTable.getColumnModel().getColumn(5).setPreferredWidth(120)
+            self.tokensTable.getColumnModel().getColumn(6).setPreferredWidth(135)
+            self.tokensTable.getColumnModel().getColumn(7).setPreferredWidth(500)
+        except:
+            pass
+
         self.tokensScroll = JScrollPane(self.tokensTable)
 
-        # Listener: zmiana rozmiaru widoku -> zastosuj ratio
-        outer = self
+        from java.awt.event import ComponentAdapter
         class _ResizeListener(ComponentAdapter):
+            """Defines the _ResizeListener class."""
+            
             def componentResized(self, e):
+                """Implements function componentResized."""
                 try:
                     outer._apply_column_widths()
                 except Exception as ex:
@@ -527,15 +626,25 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         self.tokensScroll.getViewport().addComponentListener(_ResizeListener())
         self.tokensScroll.addComponentListener(_ResizeListener())
 
-        # Listener: ręczna zmiana szerokości kolumn -> przelicz ratio i zapisz
         col_model = self.tokensTable.getColumnModel()
-        outer = self
+        from javax.swing.event import TableColumnModelListener
         class _TcmListener(TableColumnModelListener):
+            """Defines the _TcmListener class."""
+            
             def columnAdded(self, e): pass
+            """Implements function columnAdded."""
+            
             def columnRemoved(self, e): pass
+            """Implements function columnRemoved."""
+            
             def columnMoved(self, e): pass
+            """Implements function columnMoved."""
+            
             def columnSelectionChanged(self, e): pass
+            """Implements function columnSelectionChanged."""
+            
             def columnMarginChanged(self, e):
+                """Implements function columnMarginChanged."""
                 try:
                     header = outer.tokensTable.getTableHeader()
                     resizing_col = header.getResizingColumn() if header is not None else None
@@ -544,40 +653,43 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
                     SwingUtilities.invokeLater(lambda: outer._update_ratios_from_current_widths(save=True))
                 except Exception as ex:
                     outer._log("[View] columnMarginChanged err: %s" % str(ex))
-
+                    
         col_model.addColumnModelListener(_TcmListener())
 
         c.gridy = row; c.weighty = 1.0; c.fill = GridBagConstraints.BOTH
         self.settingsPanel.add(self.tokensScroll, c); row += 1
 
-        # --- Row 6: Config path
         confInfo = JLabel("Config file: %s" % CONF_FILE)
         c.gridy = row; c.weighty = 0.0; c.fill = GridBagConstraints.HORIZONTAL
         self.settingsPanel.add(confInfo, c); row += 1
 
-        # --- Log tab
         self.logArea = JTextArea(18, 100); self.logArea.setEditable(False)
         logScroll = JScrollPane(self.logArea)
         self.logPanel = JPanel(BorderLayout())
         self.logPanel.setBorder(EmptyBorder(10,10,10,10))
         self.logPanel.add(logScroll, BorderLayout.CENTER)
 
-        # --- Tabs
         self.tabbed = JTabbedPane()
         self.tabbed.addTab("Settings", self.settingsPanel)
         self.tabbed.addTab("Log", self.logPanel)
 
-        # autosave handlers
         self._wire_autosave_handlers()
 
-        # Inicjalne ratio: jeśli nie będzie wczytane z configu, policzymy z preferowanych szerokości
         try:
             self._update_ratios_from_current_widths(save=False)
         except:
             pass
 
-
+        try:
+            t = Timer(10000, lambda e: self._refresh_tokens_table_values())
+            t.setRepeats(True); t.start()
+            self._timers.append(t)
+        except:
+            pass
+    
     def _apply_column_widths(self):
+        """Internal helper function _apply_column_widths."""
+        
         try:
             viewport = self.tokensScroll.getViewport()
             if viewport is None:
@@ -610,17 +722,12 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
                 c.setMinWidth(min_w)
                 c.setPreferredWidth(w)
 
-            # bez setPreferredSize(...) – pozwalamy Swingowi dopiąć do prawej krawędzi
             self.tokensTable.doLayout()
             self.tokensTable.revalidate()
         except Exception as ex:
             self._log("[View] _apply_column_widths error: %s" % str(ex))
 
     def _update_ratios_from_current_widths(self, save=True):
-        """
-        Przelicz self._col_ratios na podstawie aktualnych szerokości kolumn.
-        Wywoływane po ręcznej zmianie szerokości kolumn (drag w headerze).
-        """
         try:
             col_model = self.tokensTable.getColumnModel()
             cols = col_model.getColumnCount()
@@ -635,12 +742,21 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
             self._log("[View] _update_ratios_from_current_widths error: %s" % str(ex))
 
     def _fix_singleline(self, tf):
+        """Internal helper function _fix_singleline."""
         tf.setMaximumSize(tf.getPreferredSize())
 
     def _wire_autosave_handlers(self):
+        """Internal helper function _wire_autosave_handlers."""
+        
         class _ItemHandler(ItemListener):
+            """Defines the _ItemHandler class."""
+            
             def __init__(self, outer): self.outer = outer
+            """Internal helper function __init__."""
+            
             def itemStateChanged(self, e): self.outer._auto_save()
+            """Implements function itemStateChanged."""
+            
         ih = _ItemHandler(self)
         for cb in [self.cbEnableFiles, self.cbWriteFiles]:
             cb.addItemListener(ih)
@@ -650,23 +766,39 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         for cb in [self.cbCProxy, self.cbCRepeater, self.cbCIntruder, self.cbCScanner,
                    self.cbCTarget, self.cbCSequencer, self.cbCExtender]:
             cb.addItemListener(ih)
+
         class _ChangeHandler(ChangeListener):
+            """Defines the _ChangeHandler class."""
+            
             def __init__(self, outer): self.outer = outer
+            """Internal helper function __init__."""
+            
             def stateChanged(self, e): self.outer._auto_save()
+            """Implements function stateChanged."""
+            
         self.refreshSpinner.addChangeListener(_ChangeHandler(self))
+
         class _FocusHandler(FocusListener):
+            """Defines the _FocusHandler class."""
+            
             def __init__(self, outer): self.outer = outer
+            """Internal helper function __init__."""
+            
             def focusGained(self, e): pass
+            """Implements function focusGained."""
+            
             def focusLost(self, e): self.outer._auto_save()
+            """Implements function focusLost."""
+            
         fh = _FocusHandler(self)
         self.dirField.addFocusListener(fh)
-        self.urlFilterField.addFocusListener(fh)
         try:
             self.gmtOffsetField.addFocusListener(fh)
         except:
             pass
 
     def _tool_name(self, toolFlag):
+        """Internal helper function _tool_name."""
         cb = self.callbacks
         mapping = {
             cb.TOOL_PROXY: "Proxy",
@@ -679,8 +811,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         }
         return mapping.get(toolFlag, "Unknown")
 
-    # --- IHttpListener ---
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
+        """Implements function processHttpMessage."""
         if getattr(self, "_unloaded", False):
             return
         if not messageIsRequest:
@@ -711,27 +843,21 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
                     full_url = u.toString()
             except:
                 full_url = ""
+            try:
+                full_url = str(full_url or "")
+            except:
+                full_url = full_url or ""
 
             if allow_capture:
-                url_ok = True
-                url_regex = self.urlFilterField.getText().strip()
-                if url_regex:
-                    try:
-                        if not re.search(url_regex, full_url or ""):
-                            url_ok = False
-                    except Exception as e:
-                        self._log("[URL-Filter] Invalid regex: %s" % str(e))
-                        url_ok = True
-                if url_ok:
-                    tool_name = self._tool_name(toolFlag)
-                    if self.rules_mgr.scan_and_update(raw_text, tool_name):
-                        self._refresh_tokens_table_values()
-                        if self.cbWriteFiles.isSelected():
-                            for ph, meta in self.rules_mgr.live_values.items():
-                                val = meta.get("value")
-                                if val and not PLACEHOLDER_EXACT.match(val):
-                                    self.file_cache.write_value(ph, val)
-                        self._flash_tab_title()
+                tool_name = self._tool_name(toolFlag)
+                if self.rules_mgr.scan_and_update(raw_text, full_url, tool_name):
+                    self._refresh_tokens_table_values()
+                    if self.cbWriteFiles.isSelected():
+                        for ph, meta in self.rules_mgr.live_values.items():
+                            val = meta.get("value")
+                            if val and not PLACEHOLDER_EXACT.match(val):
+                                self.file_cache.write_value(ph, val)
+                    self._flash_tab_title()
 
             modified_headers = None
             modified_body_str = body_str
@@ -754,24 +880,25 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         except Exception as e:
             self._log("[Error] %s" % str(e))
 
-    # --- ITab ---
     def getTabCaption(self): return EXTENSION_NAME
+    """Implements function getTabCaption."""
+    
     def getUiComponent(self): return self.tabbed
+    """Implements function getUiComponent."""
 
-    # --- Auto-save ---
     def _auto_save(self):
+        """Internal helper function _auto_save."""
         self.file_cache.set_base_dir(self.dirField.getText().strip())
         try:
             self.file_cache.set_refresh_interval(int(self.refreshSpinner.getValue()))
         except:
             pass
-        # reload rules from table
         self.rules_mgr.load_rules_from_dict(self._get_rules_dict_from_table())
         self._save_settings_to_file()
         self._refresh_tokens_table_values()
 
-    # --- Helpers ---
     def _tool_allowed(self, toolFlag, mode):
+        """Internal helper function _tool_allowed."""
         cb = self.callbacks
         allowed = []
         if mode == "replace":
@@ -782,7 +909,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
             if self.cbRTarget.isSelected():    allowed.append(cb.TOOL_TARGET)
             if self.cbRSequencer.isSelected(): allowed.append(cb.TOOL_SEQUENCER)
             if self.cbRExtender.isSelected():  allowed.append(cb.TOOL_EXTENDER)
-        else:  # capture
+        else:
             if self.cbCProxy.isSelected():     allowed.append(cb.TOOL_PROXY)
             if self.cbCRepeater.isSelected():  allowed.append(cb.TOOL_REPEATER)
             if self.cbCIntruder.isSelected():  allowed.append(cb.TOOL_INTRUDER)
@@ -793,6 +920,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         return toolFlag in allowed
 
     def _replace_in_headers(self, headers):
+        """Internal helper function _replace_in_headers."""
         changed = False
         out = ArrayList()
         for h in headers:
@@ -802,7 +930,10 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         return out if changed else None
 
     def _replace_placeholders(self, s):
+        """Internal helper function _replace_placeholders."""
+        
         def repl(m):
+            """Implements function repl."""
             ph = "__T%s__" % m.group(1)
             val = self.rules_mgr.get_live_value(ph)
             if (val is None or val == "") and self.cbEnableFiles.isSelected():
@@ -816,6 +947,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
             return s
 
     def _update_content_length(self, headers, new_len):
+        """Internal helper function _update_content_length."""
         out = ArrayList()
         for h in headers:
             if h is not None and h.lower().startswith("content-length:"):
@@ -824,46 +956,73 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
                 out.add(h)
         return out
 
-    # ---------- Table logic ----------
     def _init_table_rows_with_defaults(self):
+        """Internal helper function _init_table_rows_with_defaults."""
         self._suspend_table_events = True
         try:
-            # ensure rows for __T0__ .. __T9__
             existing = set()
             for r in range(self.tokensModel.getRowCount()):
                 existing.add(self.tokensModel.getValueAt(r, 0))
             for i in range(10):
                 ph = "__T%d__" % i
                 if ph not in existing:
-                    self.tokensModel.addRow([ph, "", "", "", "", "", ""])
-            # apply any regex from loaded config
+                    self.tokensModel.addRow([ph, "", "", "", "", "", "", ""])
+
             rules = getattr(self, "_loaded_rules_dict", {}) or {}
             for r in range(self.tokensModel.getRowCount()):
                 ph = str(self.tokensModel.getValueAt(r, 0))
-                rx = rules.get(ph, "")
+                rv = rules.get(ph, {})
+                if isinstance(rv, dict):
+                    rx = rv.get("regex", "")
+                    uf = rv.get("url_filter", "")
+                else:
+                    rx = rv or ""
+                    uf = ""
                 self.tokensModel.setValueAt(rx, r, 1)
+                self.tokensModel.setValueAt(uf, r, 2)
+
+            def _table_has_any_regex():
+                """Internal helper function _table_has_any_regex."""
+                for r in range(self.tokensModel.getRowCount()):
+                    rx = str(self.tokensModel.getValueAt(r, 1) or "").strip()
+                    if rx:
+                        return True
+                return False
+
+            if not _table_has_any_regex():
+                for r in range(self.tokensModel.getRowCount()):
+                    ph = str(self.tokensModel.getValueAt(r, 0))
+                    if ph == "__T0__":
+                        self.tokensModel.setValueAt(r"^Authorization:\s*Bearer\s+(.*?)$", r, 1)
+                        self.tokensModel.setValueAt(r".*", r, 2)
+                        break
         finally:
             self._suspend_table_events = False
 
     def _get_rules_dict_from_table(self):
+        """Internal helper function _get_rules_dict_from_table."""
         rules = {}
         for r in range(self.tokensModel.getRowCount()):
             ph = str(self.tokensModel.getValueAt(r, 0)).strip()
             rx = str(self.tokensModel.getValueAt(r, 1) or "").strip()
+            uf = str(self.tokensModel.getValueAt(r, 2) or "").strip()
             if ph.startswith("__T") and ph.endswith("__"):
                 if rx != "":
-                    rules[ph] = rx
+                    rules[ph] = {"regex": rx, "url_filter": uf}
         return rules
 
     def _on_table_edited(self):
+        """Internal helper function _on_table_edited."""
+        
         outer = self
         class _L(TableModelListener):
+            """Defines the _L class."""
+            
             def tableChanged(self, e):
+                """Implements function tableChanged."""
                 try:
-                    # jeśli trwa programatyczna aktualizacja modelu – ignoruj event
                     if getattr(outer, "_suspend_table_events", False):
                         return
-
                     row = e.getFirstRow()
                     col = e.getColumn()
                     if row < 0 or col < 0:
@@ -871,42 +1030,54 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
 
                     ph = str(outer.tokensModel.getValueAt(row, 0))
 
-                    if col == 1:  # Regex edited
+                    if col == 1:
                         rx = str(outer.tokensModel.getValueAt(row, 1) or "")
-                        outer.rules_mgr.set_rule(ph, rx)
-                        outer._log("[Rules] %s := %s" % (ph, rx))
+                        outer.rules_mgr.set_rule(ph, regex_str=rx)
+                        outer._log("[Rules] %s.regex := %s" % (ph, rx))
                         outer._auto_save()
 
-                    elif col == 6:  # Current Value edited (manual set)
-                        val = str(outer.tokensModel.getValueAt(row, 6) or "")
-                        now = time.time()
-                        outer.rules_mgr.live_values[ph] = {
-                            "value": val,
-                            "ts": now,
-                            "source": "Manual"
-                        }
-                        outer._log("[%s] [Manual] Set %s := %s" % (hash10(val), ph, val))
-                        if outer.cbWriteFiles.isSelected() and val and not PLACEHOLDER_EXACT.match(val):
-                            outer.file_cache.write_value(ph, val)
-                        outer._refresh_tokens_table_values()
-                        outer._flash_tab_title()
+                    elif col == 2:
+                        uf = str(outer.tokensModel.getValueAt(row, 2) or "")
+                        outer.rules_mgr.set_rule(ph, url_filter_regex=uf)
+                        outer._log("[Rules] %s.url_filter := %s" % (ph, uf if uf else ".*"))
+                        outer._auto_save()
 
+                    elif col == 7:
+                        new_val = str(outer.tokensModel.getValueAt(row, 7) or "")
+                        prev_meta = outer.rules_mgr.get_live_meta(ph)
+                        prev_val = (prev_meta or {}).get("value", "")
+
+                        if new_val != (prev_val or ""):
+                            now = time.time()
+                            outer.rules_mgr.live_values[ph] = {
+                                "value": new_val,
+                                "ts": now,
+                                "source": "Manual"
+                            }
+                            exp = jwt_exp_str(new_val or "")
+                            outer.tokensModel.setValueAt(exp or "", row, 6)
+                            
+                            outer._log("[%s] [Manual] Set %s := %s" % (hash10(new_val), ph, new_val))
+                            if outer.cbWriteFiles.isSelected() and new_val and not PLACEHOLDER_EXACT.match(new_val):
+                                outer.file_cache.write_value(ph, new_val)
+                            outer._refresh_tokens_table_values()
+                            outer._flash_tab_title()
+                        else:
+                            outer._log("[Manual] %s unchanged; source/timestamp preserved." % ph)
                 except Exception as ex:
                     outer._log("[TableEdit] Error: %s" % str(ex))
         return _L()
 
     def _refresh_tokens_table_values(self):
-        # wycisz eventy na czas programatycznych setValueAt(...)
+        """Internal helper function _refresh_tokens_table_values."""
         self._suspend_table_events = True
         try:
-            # fill computed columns for every row
             for r in range(self.tokensModel.getRowCount()):
                 ph = str(self.tokensModel.getValueAt(r, 0))
-                # prefer live
                 meta = self.rules_mgr.get_live_meta(ph)
                 src = meta.get("source")
                 val = meta.get("value")
-                ts = meta.get("ts")
+                ts  = meta.get("ts")
                 if not val and self.cbEnableFiles.isSelected():
                     v2, mtime = self.file_cache.get_value_and_mtime(ph)
                     if v2:
@@ -915,27 +1086,25 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
                         src = "File"
                 exp = jwt_exp_str(val or "")
                 h = hash10(val or "")
-                self.tokensModel.setValueAt(fmt_ts(ts) if ts else "", r, 2)  # Updated
-                self.tokensModel.setValueAt(h, r, 3)                         # Hash
-                self.tokensModel.setValueAt(src or "", r, 4)                 # Source
-                self.tokensModel.setValueAt(exp or "", r, 5)                 # Expires
-                # tylko gdy puste lub zgodne z tym co wyświetlamy – nie nadpisuj ręcznych edycji
-                current_cell = self.tokensModel.getValueAt(r, 6)
+                self.tokensModel.setValueAt(fmt_ts(ts) if ts else "", r, 3)
+                self.tokensModel.setValueAt(h, r, 4)
+                self.tokensModel.setValueAt(src or "", r, 5)
+                self.tokensModel.setValueAt(exp or "", r, 6)
+                current_cell = self.tokensModel.getValueAt(r, 7)
                 if not current_cell or current_cell == "" or current_cell == val:
-                    self.tokensModel.setValueAt(val or "", r, 6)
+                    self.tokensModel.setValueAt(val or "", r, 7)
         except Exception as ex:
             self._log("[View] Error refreshing tokens table: %s" % str(ex))
         finally:
             self._suspend_table_events = False
 
-    # ----- Settings persistence (JSON file in plugin folder) -----
     def _save_settings_to_file(self):
+        """Internal helper function _save_settings_to_file."""
         data = {
             "dir": self.dirField.getText().strip(),
             "interval": int(self.refreshSpinner.getValue()),
             "enable_files": bool(self.cbEnableFiles.isSelected()),
             "write_files": bool(self.cbWriteFiles.isSelected()),
-            "url_filter": self.urlFilterField.getText().strip(),
             "replace_tools": {
                 "proxy": bool(self.cbRProxy.isSelected()),
                 "repeater": bool(self.cbRRepeater.isSelected()),
@@ -958,7 +1127,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
             "rules": self._get_rules_dict_from_table()
         }
 
-        # NEW: zapisz proporcje kolumn (jeśli policzone)
         try:
             if getattr(self, "_col_ratios", None):
                 data["table_column_ratios"] = list(self._col_ratios)
@@ -972,6 +1140,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
             self._log("[Settings] Error writing conf: %s" % str(e))
 
     def _load_settings_from_file(self):
+        """Internal helper function _load_settings_from_file."""
         self._loaded_rules_dict = {}
         if not os.path.isfile(CONF_FILE):
             return
@@ -987,7 +1156,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
             self.cbEnableFiles.setSelected(bool_from(data.get("enable_files", True), True))
             self.cbWriteFiles.setSelected(bool_from(data.get("write_files", False), False))
 
-            self.urlFilterField.setText(data.get("url_filter", ""))
 
             rep = data.get("replace_tools", {})
             cap = data.get("capture_tools", {})
@@ -1023,27 +1191,29 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
             except Exception as e:
                 self._log("[Settings] GMT offset load error: %s" % str(e))
 
-            # RULES
             rules_val = data.get("rules", {})
+            loaded = {}
             if isinstance(rules_val, dict):
-                self._loaded_rules_dict = {}
                 for k, v in rules_val.items():
-                    if str(k).startswith("__T") and str(k).endswith("__"):
-                        self._loaded_rules_dict[str(k)] = str(v or "")
+                    if not (str(k).startswith("__T") and str(k).endswith("__")):
+                        continue
+                    if isinstance(v, dict):
+                        rx = (v.get("regex", "") or "")
+                        uf = (v.get("url_filter", "") or "")
+                        loaded[str(k)] = {"regex": rx, "url_filter": uf}
+                    else:
+                        loaded[str(k)] = {"regex": (v or ""), "url_filter": ""}
             else:
-                self._loaded_rules_dict = {}
                 self._log("[Settings] Discarded legacy/non-dict 'rules' from config; will use empty.")
+            self._loaded_rules_dict = loaded
 
-            # NEW: wczytaj proporcje kolumn (opcjonalnie)
             ratios = data.get("table_column_ratios")
             if isinstance(ratios, list) and len(ratios) > 0:
                 s = float(sum([float(x) for x in ratios])) or 1.0
                 self._col_ratios = [float(x)/s for x in ratios]
             else:
-                # jeśli brak – policz później z aktualnych szerokości
                 self._col_ratios = None
 
-            # file cache props
             self.file_cache.set_base_dir(self.dirField.getText().strip())
             try:
                 self.file_cache.set_refresh_interval(int(self.refreshSpinner.getValue()))
@@ -1052,7 +1222,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
 
             self._log("[Settings] Loaded from conf file")
 
-            # Po wczytaniu configu i zbudowaniu UI zastosujemy szerokości (gdy viewport będzie gotowy)
             try:
                 self._apply_column_widths()
             except:
@@ -1062,6 +1231,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
             self._log("[Settings] Error loading conf: %s" % str(e))
 
     def _log(self, msg):
+        """Internal helper function _log."""
         try:
             ts = fmt_ts(time.time())
             self.logArea.append("[%s] %s\n" % (ts, str(msg)))
@@ -1069,8 +1239,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         except Exception as ex:
             print("Log error:", ex)
 
-    # ----- Tab title "flash" when new token learned -----
     def _flash_tab_title(self):
+        """Internal helper function _flash_tab_title."""
         try:
             idx = self.tabbed.indexOfComponent(self.settingsPanel)
             if idx < 0: return
@@ -1078,6 +1248,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
             blink = EXTENSION_NAME + " • NEW"
             self.tabbed.setTitleAt(idx, blink)
             def _revert(_e):
+                """Internal helper function _revert."""
                 try: self.tabbed.setTitleAt(idx, original)
                 except: pass
             t = Timer(1200, _revert)
@@ -1089,8 +1260,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IExtensionStateListener):
         except:
             pass
 
-    # --- IExtensionStateListener ---
     def extensionUnloaded(self):
+        """Implements function extensionUnloaded."""
         try:
             self._unloaded = True
             self._log("Unloading: stopping timers and releasing resources...")
